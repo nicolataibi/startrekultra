@@ -77,7 +77,10 @@ Il comando `sta` fornisce il conteggio in tempo reale delle navi rimanenti per o
 
 ---
 *Versione 3.7* 
+
 *Sviluppato da Nicola Taibi.* 
+
 *Supportato da Google Gemini.* 
+
 **Copyright**: © 2026 Nicola Taibi  
 **Licenza**: GNU GPL v3.0
