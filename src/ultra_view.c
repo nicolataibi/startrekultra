@@ -24,6 +24,7 @@ char g_last_quadrant[128] = "";
 
 typedef struct {
     float x, y, z;
+    float h, m;
     int type;
 } GameObject;
 
@@ -159,13 +160,15 @@ void loadGameState() {
                 }
             }
         } else {
-            float gx, gy, gz;
+            float gx, gy, gz, h = 0, m = 0;
             int type;
-            if (sscanf(line, "%f %f %f %d", &gx, &gy, &gz, &type) == 4) {
+            if (sscanf(line, "%f %f %f %d %f %f", &gx, &gy, &gz, &type, &h, &m) >= 4) {
                 if (isnan(gx) || isnan(gy) || isnan(gz)) continue;
                 tempObjects[tempCount].x = gx - 5.5f;
                 tempObjects[tempCount].y = gz - 5.5f; 
                 tempObjects[tempCount].z = 5.5f - gy;
+                tempObjects[tempCount].h = h;
+                tempObjects[tempCount].m = m;
                 tempObjects[tempCount].type = type;
                 if (type == 1) { 
                     tempEntX = tempObjects[tempCount].x; 
@@ -271,10 +274,16 @@ void drawDismantle() {
     glEnable(GL_LIGHTING);
 }
 
-void drawEnterprise(float x, float y, float z) {
+void drawEnterprise(float x, float y, float z, float h, float m) {
     glPushMatrix();
     glTranslatef(x, y, z);
-    glRotatef(90, 0, 1, 0);
+    
+    /* Correct alignment: 
+       1. Rotate around Y by Heading (Adjusted so h=0 points North/+Z)
+       2. Rotate around local Z by Mark (Pitch up/down)
+    */
+    glRotatef(h - 90.0f, 0, 1, 0);
+    glRotatef(m, 0, 0, 1);
     
     /* Saucer */
     glColor3f(0.8f, 0.8f, 0.9f);
@@ -620,7 +629,7 @@ void display() {
     glEnable(GL_LIGHTING);
     for(int i=0; i<objectCount; i++) {
         switch(objects[i].type) {
-            case 1: drawEnterprise(objects[i].x, objects[i].y, objects[i].z); break;
+            case 1: drawEnterprise(objects[i].x, objects[i].y, objects[i].z, objects[i].h, objects[i].m); break;
             case 3: drawStarbase(objects[i].x, objects[i].y, objects[i].z); break;
             case 4: /* Stars */
                 glDisable(GL_LIGHTING);

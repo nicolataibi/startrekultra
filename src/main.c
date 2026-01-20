@@ -39,6 +39,7 @@ int get_rand(int iSpread);
 void ship_destroyed(void);
 const char* get_species_name(int id);
 void won_game(void);
+void smooth_rotate(double target_h, double target_m);
 void damage_report(void);
 void inventory_report(void);
 void repair_control(void);
@@ -79,6 +80,7 @@ int k9, b9;                 /* Total Klingons and Bases left */
 int e, p;                   /* Energy and Torpedoes */
 int crew_count;             /* Crew members remaining */
 int shields[4];             /* 0: Front, 1: Rear, 2: Top, 3: Bottom */
+double ent_h = 0, ent_m = 0; /* Current Enterprise orientation */
 int lock_target = 0;        /* 0: None, 1-3: Klingon ID */
 float power_dist[3] = {0.33f, 0.33f, 0.34f}; /* Engines, Shields, Weapons percentage */
 bool is_playing_dead = false;
@@ -193,6 +195,40 @@ void intro(void) {
     printf("\n" B_WHITE "Welcome aboard, Captain %s. The galaxy awaits your command." RESET "\n\n", captain_name);
     sleep(1);
 }
+void smooth_rotate(double target_h, double target_m) {
+    int steps = 60; /* 2 seconds at 30 fps */
+    double start_h = ent_h;
+    double start_m = ent_m;
+
+    /* Normalize heading difference to take shortest path */
+    double diff_h = target_h - start_h;
+    while (diff_h > 180.0) diff_h -= 360.0;
+    while (diff_h < -180.0) diff_h += 360.0;
+
+    double diff_m = target_m - start_m;
+
+    if (fabs(diff_h) < 0.1 && fabs(diff_m) < 0.1) {
+        update_3d_view();
+        wait_for_visualizer();
+        return;
+    }
+
+    printf("Adjusting ship attitude... [");
+    for (int i = 1; i <= steps; i++) {
+        ent_h = start_h + diff_h * i / (double)steps;
+        ent_m = start_m + diff_m * i / (double)steps;
+        
+        /* Ensure ent_h stays in 0-359 range */
+        if (ent_h < 0) ent_h += 360.0;
+        if (ent_h >= 360.0) ent_h -= 360.0;
+
+        update_3d_view();
+        wait_for_visualizer();
+        if (i % 6 == 0) { printf("."); fflush(stdout); }
+    }
+    printf("] Confirmed.\n");
+}
+
 void initialize(void) {
     int i, j, l;
     k9 = 0; b9 = 0;
@@ -235,10 +271,11 @@ void initialize(void) {
     for(int i=0; i<8; i++) system_health[i] = 100.0f;
     system_health[7] = 100.0f; /* Explicit life support health */
     life_support = 100.0f;     /* Explicit air reserves */
+    ent_h = 0; ent_m = 0;      /* Initial attitude */
     if (b9 == 0) { g[q1][q2][q3] += 10; b9++; }
 }
 void new_quadrant(void) {
-    int i;
+    int i = 0;
     if (q1 < 1) q1 = 1; 
     if (q1 > 10) q1 = 10;
     if (q2 < 1) q2 = 1; 
@@ -335,7 +372,7 @@ void update_3d_view(void) {
     fprintf(f, "INFO %d %d %d Q-%d-%d-%d AXES-%d GRID-%d\n", e+avg_s, avg_s, k9, q1, q2, q3, show_axes, show_grid);
     
     /* Player */
-    fprintf(f, "%f %f %f 1\n", s1, s2, s3);
+    fprintf(f, "%f %f %f 1 %f %f\n", s1, s2, s3, (float)ent_h, (float)ent_m);
     
     /* Active Beams (Phasers) */
     for (int i=0; i<beam_count; i++) {
@@ -355,19 +392,19 @@ void update_3d_view(void) {
     }
 
     /* Enemies */
-    for(int i=1; i<=3; i++) if (k[i][3] > 0) fprintf(f, "%d %d %d %d\n", k[i][0], k[i][1], k[i][2], k[i][4]);
+    for(int i=1; i<=3; i++) if (k[i][3] > 0) fprintf(f, "%d %d %d %d 0 0\n", k[i][0], k[i][1], k[i][2], k[i][4]);
     
     /* Bases */
-    for(int i=0; i<b3; i++) fprintf(f, "%d %d %d 3\n", base_pos[i][0], base_pos[i][1], base_pos[i][2]);
+    for(int i=0; i<b3; i++) fprintf(f, "%d %d %d 3 0 0\n", base_pos[i][0], base_pos[i][1], base_pos[i][2]);
 
     /* Planets */
-    for(int i=0; i<p3; i++) fprintf(f, "%d %d %d 5\n", planet_pos[i][0], planet_pos[i][1], planet_pos[i][2]);
+    for(int i=0; i<p3; i++) fprintf(f, "%d %d %d 5 0 0\n", planet_pos[i][0], planet_pos[i][1], planet_pos[i][2]);
 
     /* Black Hole */
-    for(int i=0; i<bh3; i++) fprintf(f, "%d %d %d 6\n", bh_pos[i][0], bh_pos[i][1], bh_pos[i][2]);
+    for(int i=0; i<bh3; i++) fprintf(f, "%d %d %d 6 0 0\n", bh_pos[i][0], bh_pos[i][1], bh_pos[i][2]);
 
     /* Stars */
-    for(int i=0; i<st3; i++) fprintf(f, "%d %d %d 4\n", stars_pos[i][0], stars_pos[i][1], stars_pos[i][2]);
+    for(int i=0; i<st3; i++) fprintf(f, "%d %d %d 4 0 0\n", stars_pos[i][0], stars_pos[i][1], stars_pos[i][2]);
     
     fclose(f);
     rename("/tmp/ultra_map.tmp", "/tmp/ultra_map.dat");
@@ -375,161 +412,208 @@ void update_3d_view(void) {
 }
 
 void course_control(void) {
+
     char buf[MAXLEN];
+
     double heading, mark, warp;
+
     
+
     printf(B_CYAN "\n--- 3D NAVIGATIONAL HELM ---\n" RESET);
+
     printf("HEADING (0-359): "); safe_gets(buf, MAXLEN); heading = atof(buf);
+
     printf("MARK (-90 to +90): "); safe_gets(buf, MAXLEN); mark = atof(buf);
+
     printf("WARP FACTOR (0-8): "); safe_gets(buf, MAXLEN); warp = atof(buf);
+
     double dist = warp * 10.0;
+
     if (e < dist) { printf("Insufficient energy!\n"); return; }
+
     
+
     e -= (int)dist;
+
+    smooth_rotate(heading, mark);
+
     
-    /* Spherical Trigonometry for 3D Movement (Standard Compass: 0=N, 90=E) */
+
+    /* Calculate final absolute target position */
+
     double rad_h = heading * M_PI / 180.0;
+
     double rad_m = mark * M_PI / 180.0;
-    
+
     double dx = cos(rad_m) * sin(rad_h);
-    double dy = cos(rad_m) * -cos(rad_h); /* Negative because North (0) decreases Y */
+
+    double dy = cos(rad_m) * -cos(rad_h);
+
     double dz = sin(rad_m);
-        /* Calculate final absolute target position */
-        double current_gx = (q1 - 1) * 10.0 + s1;
-        double current_gy = (q2 - 1) * 10.0 + s2;
-        double current_gz = (q3 - 1) * 10.0 + s3;
-        
-        double target_gx = current_gx + dx * dist;
-        double target_gy = current_gy + dy * dist;
-        double target_gz = current_gz + dz * dist;
+
+
+
+    double current_gx = (q1 - 1) * 10.0 + s1;
+
+    double current_gy = (q2 - 1) * 10.0 + s2;
+
+    double current_gz = (q3 - 1) * 10.0 + s3;
+
     
-            /* Clamp target within galactic bounds [1.0, 101.0] */
-            if (target_gx < 1.0) target_gx = 1.0; 
-            if (target_gx >= 101.0) target_gx = 100.9;
-            if (target_gy < 1.0) target_gy = 1.0; 
-            if (target_gy >= 101.0) target_gy = 100.9;
-                    if (target_gz < 1.0) target_gz = 1.0; 
-                    if (target_gz >= 101.0) target_gz = 100.9;
-                
-                    printf(B_WHITE "\n--- ASTROMETRIC CALCULATION REPORT ---\n" RESET);
-                    printf(" ORIGIN (Galactic): [%.2f, %.2f, %.2f]\n", current_gx, current_gy, current_gz);
-                    printf(" TARGET (Galactic): [%.2f, %.2f, %.2f]\n", target_gx, target_gy, target_gz);
-                    printf(" DISPLACEMENT VEC:  [dx:%.3f, dy:%.3f, dz:%.3f]\n", dx * dist, dy * dist, dz * dist);
-                        printf(" TRIGONOMETRY:      [H:%.1f deg, M:%.1f deg, Dist:%.2f]\n", heading, mark, dist);
-                        printf(" TRAVEL TIME:       %.1f seconds (3s/Quadrant)\n", warp * 3.0);
-                        printf(" STATUS:            Trajectory verified. Engaging Warp drive...\n\n");
-                    
+
+    double target_gx = current_gx + dx * dist;
+
+    double target_gy = current_gy + dy * dist;
+
+    double target_gz = current_gz + dz * dist;
+
+
+
+    /* Clamp target within galactic bounds */
+
+    if (target_gx < 1.0) target_gx = 1.0; 
+
+    if (target_gx >= 101.0) target_gx = 100.9;
+
+    if (target_gy < 1.0) target_gy = 1.0; 
+
+    if (target_gy >= 101.0) target_gy = 100.9;
+
+    if (target_gz < 1.0) target_gz = 1.0; 
+
+    if (target_gz >= 101.0) target_gz = 100.9;
+
+
+
+    printf(B_WHITE "\n--- ASTROMETRIC CALCULATION REPORT ---\n" RESET);
+
+    printf(" ORIGIN (Galactic): [%.2f, %.2f, %.2f]\n", current_gx, current_gy, current_gz);
+
+    printf(" TARGET (Galactic): [%.2f, %.2f, %.2f]\n", target_gx, target_gy, target_gz);
+
+    printf(" DISPLACEMENT VEC:  [dx:%.3f, dy:%.3f, dz:%.3f]\n", dx * dist, dy * dist, dz * dist);
+
+    printf(" TRIGONOMETRY:      [H:%.1f deg, M:%.1f deg, Dist:%.2f]\n", heading, mark, dist);
+
+    printf(" TRAVEL TIME:       %.1f seconds (3s/Quadrant)\n", warp * 3.0);
+
+    printf(" STATUS:            Trajectory verified. Engaging Warp drive...\n\n");
+
+
+
     int steps = (int)(warp * 3.0 * 30.0);
+
     if (steps < 30) steps = 30; 
 
+
+
     printf("Warp jump engaged! [");
+
     for (int i=1; i<=steps; i++) {
+
         double gx = current_gx + (target_gx - current_gx) * i / (double)steps;
+
         double gy = current_gy + (target_gy - current_gy) * i / (double)steps;
+
         double gz = current_gz + (target_gz - current_gz) * i / (double)steps;
+
         
-        /* Robust coordinate clamping and quadrant detection */
+
         bool boundary = false;
+
         if (gx < 1.0) { gx = 1.0; boundary = true; } if (gx >= 101.0) { gx = 100.9; boundary = true; }
+
         if (gy < 1.0) { gy = 1.0; boundary = true; } if (gy >= 101.0) { gy = 100.9; boundary = true; }
+
         if (gz < 1.0) { gz = 1.0; boundary = true; } if (gz >= 101.0) { gz = 100.9; boundary = true; }
-        
+
         if (boundary && i % 30 == 0) printf(B_RED "\n[ALERT] GALACTIC BOUNDARY REACHED. Safety clamp active.\n" RESET);
 
-        int nq1 = (int)((gx - 0.001) / 10.0) + 1;
-        int nq2 = (int)((gy - 0.001) / 10.0) + 1;
-        int nq3 = (int)((gz - 0.001) / 10.0) + 1;
 
-        if (nq1 < 1) nq1 = 1; 
-        if (nq1 > 10) nq1 = 10;
-        if (nq2 < 1) nq2 = 1; 
-        if (nq2 > 10) nq2 = 10;
-        if (nq3 < 1) nq3 = 1; 
-        if (nq3 > 10) nq3 = 10;
+
+                int nq1 = (int)((gx - 0.001) / 10.0) + 1;
+
+
+
+                int nq2 = (int)((gy - 0.001) / 10.0) + 1;
+
+
+
+                int nq3 = (int)((gz - 0.001) / 10.0) + 1;
+
+
+
         
-s1 = fmod(gx, 10.0); if (s1 == 0 && gx > 0) s1 = 10.0;
-s2 = fmod(gy, 10.0); if (s2 == 0 && gy > 0) s2 = 10.0;
-s3 = fmod(gz, 10.0); if (s3 == 0 && gz > 0) s3 = 10.0;
+
+
+
+                if (nq1 < 1) nq1 = 1; 
+
+
+
+                if (nq1 > 10) nq1 = 10;
+
+
+
+                if (nq2 < 1) nq2 = 1; 
+
+
+
+                if (nq2 > 10) nq2 = 10;
+
+
+
+                if (nq3 < 1) nq3 = 1; 
+
+
+
+                if (nq3 > 10) nq3 = 10;
+
+
+
+        
+
+        
+
+        s1 = fmod(gx, 10.0); if (s1 == 0 && gx > 0) s1 = 10.0;
+
+        s2 = fmod(gy, 10.0); if (s2 == 0 && gy > 0) s2 = 10.0;
+
+        s3 = fmod(gz, 10.0); if (s3 == 0 && gz > 0) s3 = 10.0;
+
+
 
         if (nq1 != q1 || nq2 != q2 || nq3 != q3) {
+
             q1 = nq1; q2 = nq2; q3 = nq3;
+
             new_quadrant();
+
         }
 
-                
-                    
-                
-                    
-                
-                    
-                
-                            
-                
-                    
-                
-                    
-                
-                    
-                
-                                    /* Update visualizer every step and wait for handshake */
-                
-                    
-                
-                    
-                
-                    
-                
-                                    update_3d_view();
-                
-                    
-                
-                    
-                
-                    
-                
-                                    wait_for_visualizer();
-                
-                    
-                
-                    
-                
-                    
-                
-                                    
-                
-                    
-                
-                    
-                
-                    
-                
-                                    if (i % 6 == 0) { printf("."); fflush(stdout); }
-                
-                    
-                
-                    
-                
-                    
-                
-                                }
-                
-                    
-                
-                    
-                
-                    
-                
-                            
-                
-                    
-                
-                    
-        printf("] Arrived.\n");
-    
+        update_3d_view();
+
+        wait_for_visualizer();
+
+        if (i % 6 == 0) { printf("."); fflush(stdout); }
+
+    }
+
+    printf("] Arrived.\n");
+
+    printf("Stabilizing flight attitude (Horizontal)...\n");
+
+    smooth_rotate(ent_h, 0);
+
     t += (warp < 1.0) ? warp : 1.0;
+
     new_quadrant();
+
     short_range_scan();
+
 }
+
+
 const char* get_species_name(int id) {
     switch(id) {
         case 10: return "Klingon";
@@ -683,11 +767,12 @@ void phaser_control(void) {
     int i, energy_to_fire, target_idx = 0;
         if (k3 <= 0) { printf("No enemies in range.\n"); return; }
         printf(B_YELLOW "\n--- 3D PHASER CONTROL ---\n" RESET);
-            if (lock_target > 0 && k[lock_target][3] > 0) {
-                printf("Using lock on %s %d.\n", get_species_name(k[lock_target][4]), lock_target);
-                target_idx = lock_target;
-            } else {
-                printf("Enemies available:\n");
+                                    if (lock_target > 0 && k[lock_target][3] > 0) {
+                                        printf("Using lock on %s %d.\n", get_species_name(k[lock_target][4]), lock_target);
+                                        target_idx = lock_target;
+                                    } else {
+                            
+                                    printf("Enemies available:\n");
                 for (i = 1; i <= 3; i++) {
                     if (k[i][3] > 0) printf("%d: %s at [%d,%d,%d] (Power: %d)\n", i, get_species_name(k[i][4]), k[i][0], k[i][1], k[i][2], k[i][3]);
                 }
@@ -777,10 +862,10 @@ void torpedo_control(void) {
         double dx = tx_in - s1;
         double dy = ty_in - s2;
         double dz = tz_in - s3;
-        double horizontal_dist = sqrt(dx*dx + dy*dy);
         h = atan2(dx, -dy) * 180.0 / M_PI;
         if (h < 0) h += 360.0;
-        m = atan2(dz, horizontal_dist) * 180.0 / M_PI;
+        double dist_bal = sqrt(dx*dx + dy*dy + dz*dz);
+        m = asin(dz / dist_bal) * 180.0 / M_PI;
     } else {
         printf("Enter target Sector X,Y,Z (e.g. 5,7,3) or press ENTER for manual: ");
         safe_gets(buf, MAXLEN);
@@ -1475,6 +1560,11 @@ void approach_control(void) {
     printf(" TRAVEL TIME:    %.1f seconds (3s/Quadrant)\n", (move_dist/10.0) * 3.0);
     printf(" STATUS:         Vector locked. Engaging thrusters...\n\n");
 
+    /* Rotate to target */
+    double target_h = atan2(dx, -dy) * 180.0 / M_PI; if (target_h < 0) target_h += 360.0;
+    double target_m = asin(dz / current_range) * 180.0 / M_PI;
+    smooth_rotate(target_h, target_m);
+
     /* Execute Move */
     double ux = dx / current_range; double uy = dy / current_range; double uz = dz / current_range;
     double start_s1 = s1, start_s2 = s2, start_s3 = s3;
@@ -1498,6 +1588,10 @@ void approach_control(void) {
     e -= (int)move_dist;
     t += (move_dist/10.0 < 1.0) ? (move_dist/10.0) : 1.0;
     printf(B_GREEN "Maneuver complete. New position: Sector [%.1f, %.1f, %.1f] | Dist to %s: %.2f\n" RESET, s1, s2, s3, target_name, target_dist);
+    
+    printf("Stabilizing ship attitude (Horizontal)...\n");
+    smooth_rotate(ent_h, 0);
+
     update_3d_view();
 }
 void scoop_control(void) {
