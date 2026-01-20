@@ -76,6 +76,8 @@ Il comando `sta` fornisce il conteggio in tempo reale delle navi rimanenti per o
 - **Visual**: Rendering a 30 FPS costanti con interpolazione lineare dei movimenti e scia di propulsione a scomparsa dinamica (100 frame).
 
 ---
-*Versione 3.7 - Sviluppato da Nicola Taibi e Google Gemini.*  
+*Versione 3.7*
+*Sviluppato da Nicola Taibi*
+*Supportato da Google Gemini*
 **Copyright**: © 2026 Nicola Taibi  
 **Licenza**: GNU GPL v3.0
